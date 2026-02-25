@@ -126,6 +126,7 @@ app.post('/api/crops', async (req, res) => {
         await newCrop.save();
         res.status(201).json(newCrop);
     } catch (error) {
+        console.error('❌ Crop creation failed:', error);
         res.status(400).json({ message: error.message });
     }
 });
