@@ -9,7 +9,11 @@ const PORT = process.env.PORT || 5000;
 const MONGODB_URI = process.env.MONGODB_URI;
 
 // Middleware
-app.use(cors());
+app.use(cors({
+    origin: ['https://agrilog-chi.vercel.app', 'http://localhost:5173'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    credentials: true
+}));
 app.use(express.json());
 
 // Request logger
@@ -117,6 +121,7 @@ app.get('/api/crops', async (req, res) => {
 app.post('/api/crops', async (req, res) => {
     try {
         const { veg, name, plantedDate, userId } = req.body;
+        console.log('📝 Creating crop for user:', userId, 'Veg:', veg, 'Name:', name);
         const newCrop = new Crop({ userId, veg, name, plantedDate });
         await newCrop.save();
         res.status(201).json(newCrop);
@@ -235,7 +240,7 @@ app.delete('/api/expenses/:id', async (req, res) => {
 const clientDistPath = path.join(__dirname, '../client/dist');
 app.use(express.static(clientDistPath));
 
-app.get('*', (req, res) => {
+app.get('(.*)', (req, res) => {
     // Only serve index.html if it's not an API route
     if (!req.url.startsWith('/api/')) {
         res.sendFile(path.join(clientDistPath, 'index.html'));
