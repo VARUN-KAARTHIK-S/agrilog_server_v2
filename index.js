@@ -23,13 +23,33 @@ app.use((req, res, next) => {
 });
 
 // Set up MongoDB
-if (!MONGODB_URI) {
-    console.warn('⚠️ MONGODB_URI not found. Please set it in .env file.');
-} else {
-    mongoose.connect(MONGODB_URI)
+const connectWithRetry = () => {
+    if (!MONGODB_URI) {
+        console.warn('⚠️ MONGODB_URI not found. Please set it in .env file.');
+        return;
+    }
+
+    console.log('🔄 Connecting to MongoDB Atlas...');
+    mongoose.connect(MONGODB_URI, {
+        serverSelectionTimeoutMS: 30000,  // 30s to find a server
+        socketTimeoutMS: 45000,           // 45s for socket operations
+        connectTimeoutMS: 30000,          // 30s to establish connection
+        family: 4,                        // Force IPv4 (important on Render)
+    })
         .then(() => console.log('✅ Connected to MongoDB Atlas'))
-        .catch(err => console.error('❌ MongoDB connection error:', err));
-}
+        .catch(err => {
+            console.error('❌ MongoDB connection error:', err.message);
+            console.log('🔁 Retrying connection in 5 seconds...');
+            setTimeout(connectWithRetry, 5000);
+        });
+};
+
+mongoose.connection.on('disconnected', () => {
+    console.warn('⚠️ MongoDB disconnected. Attempting to reconnect...');
+    setTimeout(connectWithRetry, 5000);
+});
+
+connectWithRetry();
 
 // ===== SCHEMAS =====
 
