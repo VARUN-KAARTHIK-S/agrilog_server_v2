@@ -2,11 +2,12 @@ const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
 const path = require('path');
-require('dotenv').config();
+require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 const MONGODB_URI = process.env.MONGODB_URI;
+console.log('📝 MONGODB_URI loaded:', MONGODB_URI ? `${MONGODB_URI.substring(0, 20)}...` : 'MISSING');
 
 // Middleware
 app.use(cors({
@@ -34,7 +35,6 @@ const connectWithRetry = () => {
         serverSelectionTimeoutMS: 30000,  // 30s to find a server
         socketTimeoutMS: 45000,           // 45s for socket operations
         connectTimeoutMS: 30000,          // 30s to establish connection
-        family: 4,                        // Force IPv4 (important on Render)
     })
         .then(() => console.log('✅ Connected to MongoDB'))
         .catch(err => {
@@ -48,6 +48,9 @@ mongoose.connection.on('disconnected', () => {
     console.warn('⚠️ MongoDB disconnected. Attempting to reconnect...');
     setTimeout(connectWithRetry, 5000);
 });
+
+// Mongoose configuration
+mongoose.set('bufferTimeoutMS', 30000); // Wait up to 30s for connection before timing out queries
 
 connectWithRetry();
 
