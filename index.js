@@ -11,7 +11,12 @@ console.log('📝 MONGODB_URI loaded:', MONGODB_URI ? `${MONGODB_URI.substring(0
 
 // Middleware
 app.use(cors({
-    origin: ['https://agrilog-chi.vercel.app', 'http://localhost:5173'],
+    origin: [
+        'https://agrilog-chi.vercel.app', 
+        'https://agrilogv2.vercel.app', 
+        'http://localhost:5173',
+        'http://localhost:3000'
+    ],
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
     credentials: true
 }));
