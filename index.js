@@ -29,14 +29,14 @@ const connectWithRetry = () => {
         return;
     }
 
-    console.log('🔄 Connecting to MongoDB Atlas...');
+    console.log('🔄 Connecting to MongoDB...');
     mongoose.connect(MONGODB_URI, {
         serverSelectionTimeoutMS: 30000,  // 30s to find a server
         socketTimeoutMS: 45000,           // 45s for socket operations
         connectTimeoutMS: 30000,          // 30s to establish connection
         family: 4,                        // Force IPv4 (important on Render)
     })
-        .then(() => console.log('✅ Connected to MongoDB Atlas'))
+        .then(() => console.log('✅ Connected to MongoDB'))
         .catch(err => {
             console.error('❌ MongoDB connection error:', err.message);
             console.log('🔁 Retrying connection in 5 seconds...');
@@ -59,6 +59,15 @@ const userSchema = new mongoose.Schema({
 }, { timestamps: true });
 const User = mongoose.model('User', userSchema);
 
+const vegetableSchema = new mongoose.Schema({
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    name: { type: String, required: true },
+    icon: { type: String, required: true },
+    unitName: { type: String, required: true },
+    commissionPerUnit: { type: Number, default: 0 }
+}, { timestamps: true });
+const Vegetable = mongoose.model('Vegetable', vegetableSchema);
+
 const cropSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     veg: { type: String, required: true },
@@ -76,7 +85,15 @@ const recordSchema = new mongoose.Schema({
     boxes: { type: Number, required: true },
     rate: Number,
     commission: Number,
-    total: Number
+    total: Number,
+    type: { type: String, enum: ['market', 'income'], default: 'market' },
+    unitName: String,
+    isCommissionWholesale: { type: Boolean, default: false },
+    lots: [{
+        qty: Number,
+        rate: Number,
+        isWholesale: { type: Boolean, default: false }
+    }]
 }, { timestamps: true });
 const Record = mongoose.model('Record', recordSchema);
 
@@ -89,6 +106,39 @@ const expenseSchema = new mongoose.Schema({
     amount: { type: Number, required: true }
 }, { timestamps: true });
 const Expense = mongoose.model('Expense', expenseSchema);
+
+const tractorOwnerSchema = new mongoose.Schema({
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    name: { type: String, required: true },
+    ploughTypes: [{
+        name: String,
+        rate: Number,
+        icon: String
+    }]
+}, { timestamps: true });
+const TractorOwner = mongoose.model('TractorOwner', tractorOwnerSchema);
+
+const tractorRecordSchema = new mongoose.Schema({
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    ownerId: { type: mongoose.Schema.Types.ObjectId, ref: 'TractorOwner', required: true },
+    farmLocation: String,
+    ploughName: String,
+    date: { type: Date, required: true },
+    timeInHrs: Number,
+    betta: Number,
+    ratePerHour: Number,
+    totalAmount: Number,
+    paid: { type: Boolean, default: false },
+    type: { type: String, enum: ['plough', 'payment'], default: 'plough' },
+    details: String
+}, { timestamps: true });
+const TractorRecord = mongoose.model('TractorRecord', tractorRecordSchema);
+
+const farmLocationSchema = new mongoose.Schema({
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    name: { type: String, required: true }
+}, { timestamps: true });
+const FarmLocation = mongoose.model('FarmLocation', farmLocationSchema);
 
 // ===== ROOT ROUTE =====
 app.get('/', (req, res) => {
@@ -117,6 +167,65 @@ app.post('/api/auth/login', async (req, res) => {
         const user = await User.findOne({ username, password });
         if (!user) return res.status(401).json({ message: 'Invalid username or password' });
         res.json({ username: user.username, _id: user._id });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+});
+
+// ===== VEGETABLE ROUTES =====
+
+app.get('/api/vegetables', async (req, res) => {
+    try {
+        const { userId } = req.query;
+        const vegetables = await Vegetable.find({ userId }).sort({ name: 1 });
+        res.json(vegetables);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+});
+
+app.post('/api/vegetables', async (req, res) => {
+    try {
+        const newVeg = new Vegetable(req.body);
+        await newVeg.save();
+        res.status(201).json(newVeg);
+    } catch (error) {
+        res.status(400).json({ message: error.message });
+    }
+});
+
+app.put('/api/vegetables/:id', async (req, res) => {
+    try {
+        await Vegetable.findByIdAndUpdate(req.params.id, req.body);
+        res.json({ message: 'Vegetable updated' });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+});
+
+app.delete('/api/vegetables/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const veg = await Vegetable.findById(id);
+        if (!veg) return res.status(404).json({ message: 'Vegetable not found' });
+
+        // 1. Find all crops associated with this vegetable for this user
+        const crops = await Crop.find({ veg: veg.name, userId: veg.userId });
+        const cropIds = crops.map(c => c._id);
+
+        // 2. Delete all records and expenses for those crops
+        if (cropIds.length > 0) {
+            await Record.deleteMany({ cropId: { $in: cropIds } });
+            await Expense.deleteMany({ cropId: { $in: cropIds } });
+        }
+
+        // 3. Delete the crops
+        await Crop.deleteMany({ _id: { $in: cropIds } });
+
+        // 4. Finally delete the vegetable itself
+        await Vegetable.findByIdAndDelete(id);
+
+        res.json({ message: 'Vegetable and all associated data deleted successfully' });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -246,6 +355,16 @@ app.post('/api/expenses', async (req, res) => {
     }
 });
 
+app.put('/api/expenses/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        await Expense.findByIdAndUpdate(id, req.body);
+        res.json({ message: 'Expense updated' });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+});
+
 app.delete('/api/expenses/:id', async (req, res) => {
     try {
         const { id } = req.params;
@@ -254,6 +373,132 @@ app.delete('/api/expenses/:id', async (req, res) => {
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
+});
+
+// ===== TRACTOR OWNER ROUTES =====
+app.get('/api/tractor-owners', async (req, res) => {
+    try {
+        const owners = await TractorOwner.find({ userId: req.query.userId }).sort({ name: 1 });
+        res.json(owners);
+    } catch (error) { res.status(500).json({ message: error.message }); }
+});
+
+app.post('/api/tractor-owners', async (req, res) => {
+    try {
+        const owner = new TractorOwner(req.body);
+        await owner.save();
+        res.status(201).json(owner);
+    } catch (error) { res.status(400).json({ message: error.message }); }
+});
+
+app.put('/api/tractor-owners/:id', async (req, res) => {
+    try {
+        await TractorOwner.findByIdAndUpdate(req.params.id, req.body);
+        res.json({ message: 'Owner updated' });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+});
+
+app.delete('/api/tractor-owners/:id', async (req, res) => {
+    try {
+        await TractorRecord.deleteMany({ ownerId: req.params.id });
+        await TractorOwner.findByIdAndDelete(req.params.id);
+        res.json({ message: 'Deleted' });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+});
+
+// ===== TRACTOR RECORD ROUTES =====
+app.get('/api/tractor-records/all', async (req, res) => {
+    try {
+        // Need to fetch all tractor records for a user
+        const records = await TractorRecord.find({ userId: req.query.userId }).populate('ownerId', 'name').sort({ date: 1 });
+        res.json(records);
+    } catch (error) { res.status(500).json({ message: error.message }); }
+});
+
+app.get('/api/tractor-records', async (req, res) => {
+    try {
+        const records = await TractorRecord.find({
+            userId: req.query.userId,
+            ownerId: req.query.ownerId
+        }).sort({ date: 1 });
+        res.json(records);
+    } catch (error) { res.status(500).json({ message: error.message }); }
+});
+
+app.post('/api/tractor-records', async (req, res) => {
+    try {
+        const { timeInHrs, ratePerHour, betta, type, amount } = req.body;
+        let totalAmount = 0;
+        if (type === 'payment') {
+            totalAmount = Number(amount) || 0;
+        } else {
+            totalAmount = (Number(timeInHrs) * Number(ratePerHour || 0)) + Number(betta || 0);
+        }
+        const rec = new TractorRecord({ ...req.body, totalAmount });
+        await rec.save();
+        res.status(201).json(rec);
+    } catch (error) { res.status(400).json({ message: error.message }); }
+});
+
+app.put('/api/tractor-records/:id', async (req, res) => {
+    try {
+        const { timeInHrs, ratePerHour, betta, type, amount } = req.body;
+        let totalAmount = 0;
+        if (type === 'payment') {
+            totalAmount = Number(amount) || 0;
+        } else {
+            totalAmount = (Number(timeInHrs) * Number(ratePerHour || 0)) + Number(betta || 0);
+        }
+        await TractorRecord.findByIdAndUpdate(req.params.id, { ...req.body, totalAmount });
+        res.json({ message: 'Record updated' });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+});
+
+app.patch('/api/tractor-records/:id/paid', async (req, res) => {
+    try {
+        const rec = await TractorRecord.findById(req.params.id);
+        if (!rec) return res.status(404).json({ message: 'Not found' });
+        rec.paid = req.body.paid;
+        await rec.save();
+        res.json({ message: 'Updated', paid: rec.paid });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+});
+
+app.delete('/api/tractor-records/:id', async (req, res) => {
+    try {
+        await TractorRecord.findByIdAndDelete(req.params.id);
+        res.json({ message: 'Deleted' });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+});
+
+// ===== FARM LOCATION ROUTES =====
+app.get('/api/farm-locations', async (req, res) => {
+    try {
+        const locations = await FarmLocation.find({ userId: req.query.userId }).sort({ name: 1 });
+        res.json(locations);
+    } catch (error) { res.status(500).json({ message: error.message }); }
+});
+
+app.post('/api/farm-locations', async (req, res) => {
+    try {
+        const loc = new FarmLocation({ ...req.body, userId: req.body.userId });
+        await loc.save();
+        res.status(201).json(loc);
+    } catch (error) { res.status(400).json({ message: error.message }); }
+});
+
+app.put('/api/farm-locations/:id', async (req, res) => {
+    try {
+        await FarmLocation.findByIdAndUpdate(req.params.id, { name: req.body.name });
+        res.json({ message: 'Updated' });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+});
+
+app.delete('/api/farm-locations/:id', async (req, res) => {
+    try {
+        await FarmLocation.findByIdAndDelete(req.params.id);
+        res.json({ message: 'Deleted' });
+    } catch (error) { res.status(500).json({ message: error.message }); }
 });
 
 /*
